@@ -4,7 +4,9 @@ const { Pool } = require("pg");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const { BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL, FRONTEND_ORIGIN } = process.env;
+const { BOT_TOKEN, DATABASE_URL, FRONTEND_ORIGIN } = process.env;
+// Givora owner Telegram ID supplied by the project owner. Can be overridden in Render.
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "5304264780";
 
 if (!BOT_TOKEN || !/^\d+$/.test(String(ADMIN_TELEGRAM_ID || "")) || !DATABASE_URL) {
   console.error("Required env vars: BOT_TOKEN, numeric ADMIN_TELEGRAM_ID, DATABASE_URL");
