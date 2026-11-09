@@ -2,7 +2,7 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const tg = window.Telegram?.WebApp;
-const API_BASE = String(window.GIVORA_API_BASE || "").replace(/\/+$/, "");
+
 const ADMIN_LABEL = "@harmonydurov";
 let me = null, listings = [], historyData = {orders:[], ledger:[], requests:[]}, inventoryData = [];
 let favs = new Set(JSON.parse(localStorage.getItem("givoraFavs") || "[]"));
@@ -12,15 +12,14 @@ const safe = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&l
 function toast(s) { $("toast").textContent=s; $("toast").classList.add("show"); setTimeout(()=>$("toast").classList.remove("show"),2600); }
 function setStatus(s, bad=false) { const el=$("statusline"); if(el){el.textContent=s;el.classList.toggle("error",bad);} }
 function api(path, options={}) {
-  if (!API_BASE || API_BASE.includes("YOUR-API")) return Promise.reject(new Error("API-адрес ещё не настроен"));
-  if (!tg?.initData) return Promise.reject(new Error("Открой Givora через Telegram Mini App"));
-  const headers = {...(options.headers||{}), "Authorization":`tma ${tg.initData}`};
-  if (options.body) headers["Content-Type"]="application/json";
-  return fetch(`${API_BASE}${path}`, {...options, headers}).then(async r=>{
-    const data=await r.json().catch(()=>({}));
-    if(!r.ok) throw new Error(data.message || data.error || `Ошибка сервера (${r.status})`);
-    return data;
-  });
+  const base=String(window.GIVORA_SUPABASE_URL||"").replace(/\/+$/, "");
+  const anon=String(window.GIVORA_SUPABASE_ANON_KEY||"");
+  if(!base.includes(".supabase.co") || anon.startsWith("YOUR-")) return Promise.reject(new Error("Настрой Supabase URL и anon key в config.js"));
+  if(!tg?.initData) return Promise.reject(new Error("Открой Givora через Telegram Mini App"));
+  return fetch(`${base}/functions/v1/${window.GIVORA_FUNCTION||"givora-api"}`,{
+    method:"POST",headers:{"Content-Type":"application/json","apikey":anon,"Authorization":`Bearer ${anon}`},
+    body:JSON.stringify({path,method:options.method||"GET",body:options.body?JSON.parse(options.body):{},initData:tg.initData})
+  }).then(async r=>{const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.message||data.error||`Ошибка сервера (${r.status})`);return data;});
 }
 function page(p) {
   activePage=p;
@@ -70,18 +69,13 @@ function closeModal() { $("modal").classList.remove("open"); }
 $("close").onclick=closeModal;
 $("modal").onclick=e=>{if(e.target===$("modal"))closeModal();};
 $("addGift1").onclick=$("addGift2").onclick=()=>{
-  openModal(`<h2>Предложить подарок</h2>
-  <p class="muted">После заявки нужно передать коллекционный подарок на проверку аккаунту <b>@GivoraStore</b>. Размещение появится только после ручной проверки администратором.</p>
-  <label>Название подарка</label><input id="reqname" maxlength="100" placeholder="Например, Liberty Figure">
-  <label>Ссылка Telegram NFT</label><input id="requrl" placeholder="https://t.me/nft/LibertyFigure-239294">
-  <label>Желаемая цена · Givora Stars</label><input id="reqprice" type="number" min="1" step="1" placeholder="1000">
-  <button class="primary" id="sendreq">Отправить заявку</button>`);
+  openModal(`<h2>Выставить подарок</h2>
+  <p class="muted">Сначала отправь настоящий Telegram-подарок на аккаунт <b>@GivoraStore</b>. После отправки нажми кнопку ниже. Заявка попадёт владельцу на проверку; в каталог подарок попадёт только после подтверждения получения.</p>
+  <button class="primary" id="sendreq">Я отправил подарок на @GivoraStore</button>`);
   $("sendreq").onclick=async()=>{
-    try {
-      const payload={giftName:$("reqname").value.trim(),giftUrl:$("requrl").value.trim(),price:Number($("reqprice").value)};
-      await api("/api/requests",{method:"POST",body:JSON.stringify(payload)});
-      closeModal(); await loadHistory(); toast("Заявка отправлена администратору");
-    } catch(e){toast(e.message);}
+    $("sendreq").disabled=true;
+    try { await api("/api/requests",{method:"POST",body:JSON.stringify({})}); closeModal(); await loadHistory(); toast("Заявка отправлена на проверку"); }
+    catch(e){ $("sendreq").disabled=false; toast(e.message); }
   };
 };
 async function confirmPurchase(id) {
@@ -101,16 +95,16 @@ async function confirmPurchase(id) {
 async function loadHistory(){historyData=await api("/api/history");return historyData;}
 function renderProfile() {
   const tgUser=tg?.initDataUnsafe?.user||{};
-  const first=me?.firstName||tgUser.first_name||"Пользователь";
-  const last=me?.lastName||tgUser.last_name||"";
+  const first=me?.first_name||me?.firstName||tgUser.first_name||"Пользователь";
+  const last=me?.last_name||me?.lastName||tgUser.last_name||"";
   const username=me?.username||tgUser.username||"";
   const fullName=`${first} ${last}`.trim();
   $("profileName").textContent=fullName;
   $("uname").textContent=username?`@${username}`:"Имя пользователя Telegram";
-  $("profileId").textContent=`Telegram ID: ${me?.telegramId||me?.telegram_id||tgUser.id||"—"}`;
+  $("profileId").textContent=`Telegram ID: ${me?.telegram_id||me?.telegramId||tgUser.id||"—"}`;
   const avatar=$("profileAvatar");
   avatar.textContent=(first[0]||"G").toUpperCase();
-  const photo=me?.photoUrl||tgUser.photo_url;
+  const photo=me?.photo_url||me?.photoUrl||tgUser.photo_url;
   if(photo){avatar.innerHTML=`<img src="${safe(photo)}" alt="Аватар" referrerpolicy="no-referrer">`;}
   $("profileBalance").innerHTML=`<div class="bal"><small>Givora Stars ⭐</small><b>${money(me?.balance)} ⭐</b></div>`;
   $("balanceRates").innerHTML=`<div class="bal"><small>Доступный баланс</small><b>${money(me?.balance)} ⭐</b></div>`;
@@ -119,6 +113,7 @@ function renderProfile() {
   $("adminEntry").style.display=me?.isAdmin?"block":"none";
 }
 $("supportLink").onclick=()=>window.open("https://t.me/Givorasupport","_blank");
+$("promoApply").onclick=async()=>{const b=$("promoApply");b.disabled=true;$("promoResult").textContent="Проверяем промокод…";try{const r=await api("/api/promo/redeem",{method:"POST",body:JSON.stringify({code:$("promoInput").value.trim()})});$("promoResult").textContent=`Промокод активирован: +${money(r.bonus)} Givora Stars`; $("promoInput").value="";await refreshAll();}catch(e){$("promoResult").textContent=e.message;}finally{b.disabled=false;}};
 $("adminEntry").onclick=()=>{if(me?.isAdmin)page("admin");};
 function renderOrders() {
   const inv=inventoryData.map(g=>`<div class="panel"><b>${safe(g.gift_name)}</b><p class="muted">Статус подарка: ${safe(g.status)} · Заказ №${safe(g.order_id)}</p><a href="${safe(g.gift_url)}" target="_blank" rel="noopener">Открыть подарок</a></div>`);
@@ -162,10 +157,11 @@ async function renderAdmin() {
     c.querySelectorAll("[data-refund]").forEach(b=>b.onclick=()=>finishOrder(b.dataset.refund,"refund"));
   }
   if(adminTab==="settings"){
-    c.innerHTML=`<div class="panel"><h3>Валюта и безопасность</h3><p>Givora Stars — внутренняя валюта сервиса. Это не Telegram Stars, не электронные деньги и не средство вывода. Ручное начисление доступно только администратору.</p><p>Администратор: ${ADMIN_LABEL}</p></div>`;
+    c.innerHTML=`<div class="panel"><h3>Создать промокод</h3><label>Код</label><input id="promocode" maxlength="40" placeholder="GIVORA2026"><label>Бонус Givora Stars</label><input id="promobonus" type="number" min="1"><label>Лимит активаций</label><input id="promolimit" type="number" min="1" value="100"><label>Срок действия (необязательно)</label><input id="promoexpiry" type="datetime-local"><button class="primary" id="createpromo">Создать промокод</button><p class="muted" id="promoAdminResult"></p></div><div class="panel"><h3>Валюта и безопасность</h3><p>Givora Stars — внутренняя валюта сервиса. Это не Telegram Stars, не электронные деньги и не средство вывода. Ручное начисление доступно только администратору.</p><p>Администратор: ${ADMIN_LABEL}</p></div>`;
+    $("createpromo").onclick=async()=>{try{const r=await api("/api/admin/promos",{method:"POST",body:JSON.stringify({code:$("promocode").value,bonus:Number($("promobonus").value),usageLimit:Number($("promolimit").value),expiresAt:$("promoexpiry").value?new Date($("promoexpiry").value).toISOString():null})});$("promoAdminResult").textContent=`Промокод ${r.promo.code} создан`;}catch(e){$("promoAdminResult").textContent=e.message;}};
   }
 }
-async function reviewRequest(id,decision){try{await api(`/api/admin/requests/${id}/review`,{method:"POST",body:JSON.stringify({decision})});toast("Заявка обработана");await renderAdmin();await refreshListings();}catch(e){toast(e.message);}}
+async function reviewRequest(id,decision){try{let payload={decision};if(decision==="approve"){const name=prompt("Название полученного и проверенного подарка");if(!name)return;const giftUrl=prompt("Ссылка на Telegram NFT");if(!giftUrl)return;const price=Number(prompt("Цена в Givora Stars"));if(!Number.isSafeInteger(price)||price<=0)return;payload={decision,name,giftUrl,price};}await api(`/api/admin/requests/${id}/review`,{method:"POST",body:JSON.stringify(payload)});toast("Заявка обработана");await renderAdmin();await refreshListings();}catch(e){toast(e.message);}}
 function addListing(){
  openModal(`<h2>Добавить подарок</h2><p class="muted">Добавляй только подарок, фактически полученный на аккаунт GivoraStore и проверенный тобой.</p>
  <label>Название</label><input id="newname" maxlength="100"><label>Ссылка на NFT</label><input id="newurl" placeholder="https://t.me/nft/..."><label>Цена · Givora Stars</label><input id="newprice" type="number" min="1" step="1"><button class="primary" id="createListing">Добавить в каталог</button>`);

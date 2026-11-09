@@ -1,1 +1,1 @@
-Сначала прочитай README-SUPABASE-RU.txt. Это пакет основы миграции, а не готовый production-релиз. Не публикуй секреты в GitHub.
+Givora Supabase integration candidate. Read README-SUPABASE-RU.txt before deployment.
