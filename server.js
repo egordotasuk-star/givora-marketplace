@@ -4,9 +4,7 @@ const { Pool } = require("pg");
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-const { BOT_TOKEN, DATABASE_URL, FRONTEND_ORIGIN } = process.env;
-// Givora owner Telegram ID supplied by the project owner. Can be overridden in Render.
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID || "5304264780";
+const { BOT_TOKEN, ADMIN_TELEGRAM_ID, DATABASE_URL, FRONTEND_ORIGIN } = process.env;
 
 if (!BOT_TOKEN || !/^\d+$/.test(String(ADMIN_TELEGRAM_ID || "")) || !DATABASE_URL) {
   console.error("Required env vars: BOT_TOKEN, numeric ADMIN_TELEGRAM_ID, DATABASE_URL");
@@ -41,12 +39,6 @@ CREATE TABLE IF NOT EXISTS users (
  telegram_id TEXT PRIMARY KEY, username TEXT, first_name TEXT NOT NULL,
  balance BIGINT NOT NULL DEFAULT 0 CHECK(balance >= 0),
  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE TABLE IF NOT EXISTS moderator_roles (
- telegram_id TEXT PRIMARY KEY,
- granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
- expires_at TIMESTAMPTZ NOT NULL,
- granted_by TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS listings (
  id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, gift_id TEXT NOT NULL, gift_url TEXT NOT NULL,
@@ -133,14 +125,6 @@ function adminOnly(req, res, next) {
   if (req.user.id !== String(ADMIN_TELEGRAM_ID)) return res.status(403).json({ error: "admin_only" });
   next();
 }
-async function moderatorOrAdmin(req, res, next) {
-  if (req.user.id === String(ADMIN_TELEGRAM_ID)) return next();
-  try {
-    const r = await pool.query("SELECT 1 FROM moderator_roles WHERE telegram_id=$1 AND expires_at>NOW()", [req.user.id]);
-    if (!r.rowCount) return res.status(403).json({ error: "moderator_only" });
-    next();
-  } catch (e) { next(e); }
-}
 function validAmount(value) {
   return Number.isSafeInteger(value) && value > 0 && value <= 100000000;
 }
@@ -166,11 +150,8 @@ app.use("/api", auth);
 app.get("/api/me", async (req, res) => {
   const r = await pool.query("SELECT telegram_id,username,first_name,balance FROM users WHERE telegram_id=$1", [req.user.id]);
   const u = r.rows[0];
-  const role = await pool.query("SELECT expires_at FROM moderator_roles WHERE telegram_id=$1 AND expires_at>NOW()", [req.user.id]);
   res.json({ user: { id: u.telegram_id, username: u.username, firstName: u.first_name,
-    balance: Number(u.balance), isAdmin: req.user.id === String(ADMIN_TELEGRAM_ID),
-    isModerator: role.rowCount > 0 || req.user.id === String(ADMIN_TELEGRAM_ID),
-    moderatorExpiresAt: role.rows[0]?.expires_at || null } });
+    balance: Number(u.balance), isAdmin: req.user.id === String(ADMIN_TELEGRAM_ID) } });
 });
 app.get("/api/listings", async (_req, res) => {
   const r = await pool.query(
@@ -207,14 +188,14 @@ app.post("/api/requests", async (req, res) => {
   res.status(201).json({ request: r.rows[0] });
 });
 
-app.get("/api/admin/requests", moderatorOrAdmin, async (_req, res) => {
+app.get("/api/admin/requests", adminOnly, async (_req, res) => {
   const r = await pool.query(
     `SELECT r.*,u.username,u.first_name FROM gift_requests r
      JOIN users u ON u.telegram_id=r.user_id ORDER BY r.created_at DESC LIMIT 200`
   );
   res.json({ requests: r.rows });
 });
-app.post("/api/admin/requests/:id/review", moderatorOrAdmin, async (req, res) => {
+app.post("/api/admin/requests/:id/review", adminOnly, async (req, res) => {
   const decision = req.body?.decision;
   if (!["approve", "reject"].includes(decision)) return res.status(400).json({ error: "invalid_decision" });
   const c = await pool.connect();
@@ -249,7 +230,7 @@ app.post("/api/admin/listings", adminOnly, async (req, res) => {
   );
   res.status(201).json({ id: Number(r.rows[0].id) });
 });
-app.delete("/api/admin/listings/:id", moderatorOrAdmin, async (req, res) => {
+app.delete("/api/admin/listings/:id", adminOnly, async (req, res) => {
   const r = await pool.query("UPDATE listings SET status='hidden' WHERE id=$1 AND status='active'", [req.params.id]);
   res.json({ ok: r.rowCount === 1 });
 });
@@ -376,14 +357,5 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "internal_error" });
 });
 pool.query(schema)
-  .then(async () => {
-    // The configured account owner receives a one-year moderator record once.
-    // ON CONFLICT DO NOTHING prevents restarts from silently extending the term.
-    await pool.query(
-      `INSERT INTO moderator_roles(telegram_id,expires_at,granted_by)
-       VALUES($1,NOW()+INTERVAL '1 year',$1) ON CONFLICT(telegram_id) DO NOTHING`,
-      [String(ADMIN_TELEGRAM_ID)]
-    );
-  })
   .then(() => app.listen(PORT, () => console.log(`Givora API listening on ${PORT}`)))
   .catch(err => { console.error("Database migration failed:", err); process.exit(1); });
