@@ -1,0 +1,4 @@
+project_id = "givora"
+
+[functions.redeem-owner-code]
+verify_jwt = false
