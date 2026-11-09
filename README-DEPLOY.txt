@@ -77,3 +77,11 @@ Render Web Service должен использовать команду npm star
 8) Сделай резервную копию БД до любого публичного запуска.
 
 НЕЛЬЗЯ размещать BOT_TOKEN, DATABASE_URL или ADMIN_TELEGRAM_ID в клиентском JavaScript, HTML или GitHub.
+
+
+MODERATOR TERM (v1)
+- On the first successful server startup after this update, the account configured as ADMIN_TELEGRAM_ID receives a one-year moderator-role record.
+- The expiry is stored in PostgreSQL and is not extended by ordinary server restarts.
+- The moderator role can review gift-submission requests and hide active listings. Financial actions (balance credits, delivery confirmation, refunds, user administration) remain admin-only.
+- The role is checked server-side; changing browser JavaScript cannot grant moderator permissions.
+- The profile displays the moderator status. The configured ADMIN_TELEGRAM_ID account remains the administrator as well.

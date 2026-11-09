@@ -115,7 +115,10 @@ function renderProfile() {
   $("profileBalance").innerHTML=`<div class="bal"><small>Givora Stars ⭐</small><b>${money(me?.balance)} ⭐</b></div>`;
   $("balanceRates").innerHTML=`<div class="bal"><small>Доступный баланс</small><b>${money(me?.balance)} ⭐</b></div>`;
   $("starbalance").textContent=money(me?.balance);
-  $("adminHint").textContent=me?.isAdmin?"Администратор Givora":"Ваш профиль на маркетплейсе Givora";
+  const expiry=me?.moderatorExpiresAt?new Date(me.moderatorExpiresAt).toLocaleDateString("ru-RU"):null;
+  $("adminHint").textContent=me?.isAdmin
+    ? `Администратор Givora · модераторский статус активен${expiry?` до ${expiry}`:""}`
+    : me?.isModerator ? `Модератор Givora · статус до ${expiry||"уточняется"}` : "Ваш профиль на маркетплейсе Givora";
   $("adminEntry").style.display=me?.isAdmin?"block":"none";
 }
 $("supportLink").onclick=()=>window.open("https://t.me/Givorasupport","_blank");
