@@ -197,7 +197,7 @@ function calc(){const n=Number($("ton").value);$("usd").textContent=rate!==null&
 $("refresh").onclick=$("refresh2").onclick=loadRate;$("ton").oninput=calc;
 async function boot(){
  if(tg){tg.ready();tg.expand();}
- if(!API_BASE||API_BASE.includes("YOUR-API")){setStatus("API не подключён: настрой адрес серверного API в config.js.",true);return;}
+if(!window.GIVORA_SUPABASE_URL||!window.GIVORA_SUPABASE_ANON_KEY||window.GIVORA_SUPABASE_URL.includes("YOUR-")){setStatus("Не настроено подключение Supabase",true);return;}
  if(!tg?.initData){setStatus("Для входа открой Givora через Telegram Mini App.",true);return;}
  setStatus("Подключаем аккаунт Telegram…");
  try{await refreshAll();setStatus("Подключено к Givora");}
