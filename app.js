@@ -100,13 +100,25 @@ async function confirmPurchase(id) {
 }
 async function loadHistory(){historyData=await api("/api/history");return historyData;}
 function renderProfile() {
-  $("uname").textContent=me?.username?`@${me.username}`:(me?.firstName||"Пользователь");
+  const tgUser=tg?.initDataUnsafe?.user||{};
+  const first=me?.firstName||tgUser.first_name||"Пользователь";
+  const last=me?.lastName||tgUser.last_name||"";
+  const username=me?.username||tgUser.username||"";
+  const fullName=`${first} ${last}`.trim();
+  $("profileName").textContent=fullName;
+  $("uname").textContent=username?`@${username}`:"Имя пользователя Telegram";
+  $("profileId").textContent=`Telegram ID: ${me?.telegramId||me?.telegram_id||tgUser.id||"—"}`;
+  const avatar=$("profileAvatar");
+  avatar.textContent=(first[0]||"G").toUpperCase();
+  const photo=me?.photoUrl||tgUser.photo_url;
+  if(photo){avatar.innerHTML=`<img src="${safe(photo)}" alt="Аватар" referrerpolicy="no-referrer">`;}
   $("profileBalance").innerHTML=`<div class="bal"><small>Givora Stars ⭐</small><b>${money(me?.balance)} ⭐</b></div>`;
   $("balanceRates").innerHTML=`<div class="bal"><small>Доступный баланс</small><b>${money(me?.balance)} ⭐</b></div>`;
   $("starbalance").textContent=money(me?.balance);
-  $("adminHint").textContent=me?.isAdmin?"Администратор Givora": "Аккаунт пользователя Givora";
+  $("adminHint").textContent=me?.isAdmin?"Администратор Givora":"Ваш профиль на маркетплейсе Givora";
   $("adminEntry").style.display=me?.isAdmin?"block":"none";
 }
+$("supportLink").onclick=()=>window.open("https://t.me/Givorasupport","_blank");
 $("adminEntry").onclick=()=>{if(me?.isAdmin)page("admin");};
 function renderOrders() {
   const inv=inventoryData.map(g=>`<div class="panel"><b>${safe(g.gift_name)}</b><p class="muted">Статус подарка: ${safe(g.status)} · Заказ №${safe(g.order_id)}</p><a href="${safe(g.gift_url)}" target="_blank" rel="noopener">Открыть подарок</a></div>`);
