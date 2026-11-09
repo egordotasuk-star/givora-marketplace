@@ -178,7 +178,7 @@ async function finishOrder(id,action){
 }
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{adminTab=b.dataset.tab;renderAdmin().catch(e=>toast(e.message));});
 async function refreshListings(){const d=await api("/api/listings");listings=d.listings;renderGrid();renderFavs();}
-async function refreshAll(){const [m]=await Promise.all([api("/api/me"),refreshListings(),loadHistory()]);me=m.user;const inv=await api("/api/inventory");inventoryData=inv.inventory;renderProfile();if(activePage==="orders")renderOrders();}
+async function refreshAll(){const [m]=await Promise.all([api("/api/me"),refreshListings(),loadHistory()]);me={...m.user,balance:m.balance,isAdmin:m.isAdmin};;;const inv=await api("/api/inventory");inventoryData=inv.inventory;renderProfile();if(activePage==="orders")renderOrders();}
 async function loadRate(){
  $("rate").textContent="Загрузка курса…";
  let usd=null,usdt=null;
