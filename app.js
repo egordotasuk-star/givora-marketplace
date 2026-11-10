@@ -153,17 +153,13 @@ function renderOrders() {
 }
 async function renderAdmin() {
   if(!me?.isAdmin) throw new Error("Доступ только администратору");
-  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===adminTab));
+  document.querySelectorAll("[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===adminTab));
   const c=$("admincontent"); c.innerHTML='<div class="empty">Загрузка…</div>';
   if(adminTab==="overview"){
     const [rq,us,od]=await Promise.all([api("/api/admin/requests"),api("/api/admin/users"),api("/api/admin/orders")]);
     c.innerHTML=`<div class="balances"><div class="bal"><small>Заявки</small><b>${rq.requests.length}</b></div><div class="bal"><small>Пользователи</small><b>${us.users.length}</b></div><div class="bal"><small>Заказы</small><b>${od.orders.length}</b></div></div>
       <div class="panel"><h3>Администрирование</h3><button class="wide" id="goRequests">Заявки на размещение</button><button class="wide" id="goListings">Каталог</button><button class="wide" id="goUsers">Пользователи и начисления</button><button class="wide" id="goOrders">Заказы и доставка</button></div>`;
     [["goRequests","requests"],["goListings","listings"],["goUsers","users"],["goOrders","orders"]].forEach(([id,t])=>$(id).onclick=()=>{adminTab=t;renderAdmin().catch(e=>toast(e.message));});
-  }
-  if(adminTab==="inventory"){
-    c.innerHTML=`<div class="panel"><h3>Выдать виртуальный подарок</h3><label>@username или Telegram ID</label><input id="issueuser" placeholder="@username или 123456789"><label>Название подарка</label><input id="issuename" maxlength="100"><label>URL картинки (HTTPS)</label><input id="issueimage" placeholder="https://..."><button class="primary" id="issuegift">Выдать подарок</button><p id="issueresult" class="muted"></p></div><div class="panel"><h3>Склад владельца</h3><p class="muted">Выданные виртуальные подарки сразу появятся у пользователя в инвентаре.</p></div>`;
-    $("issuegift").onclick=async()=>{const b=$("issuegift");b.disabled=true;try{await api("/api/admin/inventory",{method:"POST",body:JSON.stringify({user:$("issueuser").value.trim(),name:$("issuename").value.trim(),imageUrl:$("issueimage").value.trim()})});$("issueresult").textContent="Подарок выдан";$("issueuser").value=$("issuename").value=$("issueimage").value="";}catch(e){$("issueresult").textContent=e.message;}finally{b.disabled=false;}};
   }
   if(adminTab==="requests"){
     const d=await api("/api/admin/requests");
@@ -190,8 +186,10 @@ async function renderAdmin() {
   }
   if(adminTab==="inventory"){
     const d=await api("/api/admin/inventory");
-    c.innerHTML=`<div class="panel"><h3>Склад Givora</h3><p class="muted">Добавляй сюда только подарки, которые действительно находятся на аккаунте @GivoraStore.</p><label>Название подарка</label><input id="stockname" maxlength="100" placeholder="Название подарка"><label>Ссылка на Telegram NFT</label><input id="stockurl" placeholder="https://t.me/nft/..."><button class="primary" id="stockadd">Добавить на склад</button></div>`+
-      (d.inventory||[]).map(x=>`<div class="adminrow"><div><b>${safe(x.gift_name)}</b><small>${safe(x.status)} · ${safe(x.gift_url||"Без ссылки")}</small></div><div><button class="action good" data-stockpublish="${x.id}" ${x.status==="listed"?"disabled":""}>В каталог</button> <button class="action bad" data-stockdelete="${x.id}">Удалить</button></div></div>`).join("")||'<div class="empty">Склад пока пуст</div>';
+    const stockRows=(d.inventory||[]).map(x=>`<div class="adminrow"><div><b>${safe(x.gift_name)}</b><small>${safe(x.status)} · ${safe(x.gift_url||"Без ссылки")}</small></div><div><button class="action good" data-stockpublish="${x.id}" ${x.status==="listed"?"disabled":""}>В каталог</button> <button class="action bad" data-stockdelete="${x.id}">Удалить</button></div></div>`).join("")||'<div class="empty">Склад пока пуст</div>';
+    c.innerHTML=`<div class="panel"><h3>Выдать виртуальный подарок</h3><p class="muted">Это тестовая карточка в Givora; она не передаёт настоящий Telegram NFT.</p><label>@username или Telegram ID</label><input id="issueuser" placeholder="@username или 123456789"><label>Название подарка</label><input id="issuename" maxlength="100"><label>URL картинки (HTTPS)</label><input id="issueimage" placeholder="https://..."><button class="primary" id="issuegift">Выдать подарок</button><p id="issueresult" class="muted"></p></div>
+      <div class="panel"><h3>Склад Givora</h3><p class="muted">Добавляй сюда только подарки, которые действительно находятся на аккаунте @GivoraStore.</p><label>Название подарка</label><input id="stockname" maxlength="100" placeholder="Название подарка"><label>Ссылка на Telegram NFT</label><input id="stockurl" placeholder="https://t.me/nft/..."><button class="primary" id="stockadd">Добавить на склад</button></div>${stockRows}`;
+    $("issuegift").onclick=async()=>{const b=$("issuegift");b.disabled=true;try{await api("/api/admin/inventory",{method:"POST",body:JSON.stringify({user:$("issueuser").value.trim(),name:$("issuename").value.trim(),imageUrl:$("issueimage").value.trim()})});$("issueresult").textContent="Виртуальная карточка выдана";$("issueuser").value=$("issuename").value=$("issueimage").value="";}catch(e){$("issueresult").textContent=e.message;}finally{b.disabled=false;}};
     $("stockadd").onclick=async()=>{try{const name=$("stockname").value.trim(),giftUrl=$("stockurl").value.trim();if(!name||!giftUrl)throw new Error("Заполни название и ссылку");await api("/api/admin/inventory",{method:"POST",body:JSON.stringify({name,giftUrl})});await renderAdmin();toast("Подарок добавлен на склад");}catch(e){toast(e.message);}};
     c.querySelectorAll("[data-stockpublish]").forEach(b=>b.onclick=async()=>{const price=Number(prompt("Цена в тестовых Givora Stars"));if(!Number.isSafeInteger(price)||price<=0)return;try{await api(`/api/admin/inventory/${b.dataset.stockpublish}/publish`,{method:"POST",body:JSON.stringify({price})});await refreshListings();await renderAdmin();toast("Подарок опубликован в каталоге");}catch(e){toast(e.message);}});
     c.querySelectorAll("[data-stockdelete]").forEach(b=>b.onclick=async()=>{if(!confirm("Удалить запись со склада?"))return;try{await api(`/api/admin/inventory/${b.dataset.stockdelete}`,{method:"DELETE"});await renderAdmin();toast("Запись удалена");}catch(e){toast(e.message);}});
@@ -219,9 +217,9 @@ async function finishOrder(id,action){
  if(!confirm(msg))return;
  try{await api(`/api/admin/orders/${id}/${action}`,{method:"POST",body:"{}"});toast("Заказ обновлён");await renderAdmin();}catch(e){toast(e.message);}
 }
-document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{adminTab=b.dataset.tab;renderAdmin().catch(e=>toast(e.message));});
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{adminTab=b.dataset.tab;renderAdmin().catch(e=>toast(e.message));});
 async function refreshListings(){const d=await api("/api/listings");listings=d.listings;renderGrid();renderFavs();}
-async function refreshAll(){const [m]=await Promise.all([api("/api/me"),refreshListings(),loadHistory()]);me={...m.user,balance:m.balance,isAdmin:m.isAdmin};;;const inv=await api("/api/inventory");inventoryData=inv.inventory;renderProfile();if(activePage==="orders")renderOrders();}
+async function refreshAll(){const [m]=await Promise.all([api("/api/me"),refreshListings(),loadHistory()]);const user=m.user||m;me={...user,balance:user.balance??m.balance??0,isAdmin:user.isAdmin??m.isAdmin??false};const inv=await api("/api/inventory");inventoryData=inv.inventory;renderProfile();if(activePage==="orders")renderOrders();}
 async function loadRate(){
  $("rate").textContent="Загрузка курса…";
  let usd=null,usdt=null;
