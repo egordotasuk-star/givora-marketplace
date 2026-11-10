@@ -33,7 +33,12 @@ function page(p) {
 }
 document.querySelectorAll("[data-page]").forEach(b=>b.addEventListener("click",()=>page(b.dataset.page)));
 $("toCatalog").onclick=()=>$("search").focus();
-$("theme").onclick=()=>document.body.classList.toggle("light");
+const savedTheme=localStorage.getItem("givoraTheme");
+if(savedTheme==="light") document.body.classList.add("light");
+$("theme").onclick=()=>{
+  document.body.classList.toggle("light");
+  localStorage.setItem("givoraTheme",document.body.classList.contains("light")?"light":"dark");
+};
 function giftImage(g) {
   if (g.image_url) return g.image_url;
   const slug=String(g.gift_url||"").split("/").pop();
@@ -134,7 +139,7 @@ function renderInventoryPage(){
 async function sellInventoryItem(id){
  const price=Number(prompt("Цена в Givora Stars"));
  if(!Number.isSafeInteger(price)||price<=0)return;
- try{await api(`/api/admin/inventory/${encodeURIComponent(id)}/publish`,{method:"POST",body:JSON.stringify({price})});toast("Подарок выставлен на продажу");await loadInventoryPage();await refreshListings();}
+ try{await api(`/api/inventory/${encodeURIComponent(id)}/publish`,{method:"POST",body:JSON.stringify({price})});toast("Подарок выставлен на продажу");await loadInventoryPage();await refreshListings();}
  catch(e){toast(e.message);}
 }
 document.querySelectorAll("[data-invtab]").forEach(b=>b.onclick=()=>{inventoryTab=b.dataset.invtab;renderInventoryPage();});

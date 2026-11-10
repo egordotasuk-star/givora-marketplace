@@ -53,17 +53,48 @@ Deno.serve(async(req)=>{
    const {data:orderId,error}=await db.rpc("givora_purchase",{p_user:tg.id,p_gift:giftId,p_recipient:String(data.recipientUsername||"").replace(/^@/,"")||null});
    if(error)throw error;return reply({ok:true,orderId});
   }
+  // User publishes only their own available inventory item.
+  const userPublish=path.match(/^\\/api\\/inventory\\/([^/]+)\\/publish$/);
+  if(userPublish&&method==="POST"){
+   const price=Math.floor(Number(data.price));
+   if(!Number.isSafeInteger(price)||price<=0)throw new Error("Цена должна быть положительной");
+   const {data:id,error}=await db.rpc("givora_publish_inventory",{p_user:tg.id,p_item:userPublish[1],p_price:price});
+   if(error)throw error;
+   return reply({ok:true,listingId:id});
+  }
   if(path.startsWith("/api/admin/")){
    admin();
    if(path==="/api/admin/promos"&&method==="GET"){const {data:d,error}=await db.from("promos").select("*").order("created_at",{ascending:false});if(error)throw error;return reply({promos:d||[]});}
    const promoDelete=path.match(/^\/api\/admin\/promos\/([^/]+)$/);if(promoDelete&&method==="DELETE"){const {error}=await db.from("promos").update({active:false}).eq("id",promoDelete[1]);if(error)throw error;return reply({ok:true});}
+   if(path==="/api/admin/inventory"&&method==="GET"){
+    const {data:d,error}=await db.from("inventory").select("*").order("created_at",{ascending:false});
+    if(error)throw error;
+    return reply({inventory:d||[]});
+   }
    if(path==="/api/admin/inventory"&&method==="POST"){
-    const who=String(data.user||"").trim().replace(/^@/,""),name=String(data.name||"").trim(),imageUrl=String(data.imageUrl||"").trim();
-    if(!who||!name||!/^https:\/\//i.test(imageUrl))throw new Error("Укажи пользователя, название и HTTPS-ссылку на картинку");
-    let uq=db.from("profiles").select("telegram_id").limit(1);
-    uq=/^\d+$/.test(who)?uq.eq("telegram_id",Number(who)):uq.ilike("username",who);
-    const {data:u,error:ue}=await uq.maybeSingle();if(ue)throw ue;if(!u)throw new Error("Пользователь не найден. Он должен открыть Givora хотя бы один раз");
-    const {data:id,error}=await db.rpc("givora_admin_issue_gift",{p_user:u.telegram_id,p_name:name,p_image_url:imageUrl});if(error)throw error;return reply({ok:true,id});
+    const who=String(data.user||"").trim().replace(/^@/,""),name=String(data.name||"").trim();
+    const imageUrl=String(data.imageUrl||"").trim(),giftUrl=String(data.giftUrl||"").trim();
+    // Admin can add a virtual gift directly to a user's collection.
+    if(who){
+     if(!name||!/^https:\/\//i.test(imageUrl))throw new Error("Укажи пользователя, название и HTTPS-ссылку на картинку");
+     let uq=db.from("profiles").select("telegram_id").limit(1);
+     uq=/^\d+$/.test(who)?uq.eq("telegram_id",Number(who)):uq.ilike("username",who);
+     const {data:u,error:ue}=await uq.maybeSingle();if(ue)throw ue;if(!u)throw new Error("Пользователь не найден. Он должен открыть Givora хотя бы один раз");
+     const {data:id,error}=await db.rpc("givora_admin_issue_gift",{p_user:u.telegram_id,p_name:name,p_image_url:imageUrl});if(error)throw error;return reply({ok:true,id});
+    }
+    // Admin stock entry used by the inventory-management tab.
+    if(!name||!giftUrl)throw new Error("Заполни название и ссылку на подарок");
+    const {data:item,error}=await db.from("inventory").insert({telegram_id:Number(owner),gift_name:name,gift_url:giftUrl,image_url:imageUrl||null,status:"available"}).select().single();
+    if(error)throw error;
+    return reply({ok:true,item});
+   }
+   const stockDelete=path.match(/^\/api\/admin\/inventory\/([^/]+)$/);
+   if(stockDelete&&method==="DELETE"){
+    const {data:item,error:readError}=await db.from("inventory").select("id,status,telegram_id").eq("id",stockDelete[1]).maybeSingle();
+    if(readError)throw readError;if(!item)throw new Error("Запись не найдена");
+    if(item.status==="listed")throw new Error("Сначала снимите подарок с продажи");
+    const {error}=await db.from("inventory").delete().eq("id",stockDelete[1]);if(error)throw error;
+    return reply({ok:true});
    }
    if(path==="/api/admin/promos"&&method==="POST"){
     const code=String(data.code||"").trim().toUpperCase(),bonus=Math.floor(Number(data.bonus)),usageLimit=Math.floor(Number(data.usageLimit));
