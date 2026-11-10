@@ -28,6 +28,7 @@ function page(p) {
   if(p==="profile") renderProfile();
   if(p==="favorites") renderFavs();
   if(p==="orders") loadHistory().then(renderOrders).catch(e=>toast(e.message));
+  if(p==="inventory") loadInventoryPage().catch(e=>toast(e.message));
   if(p==="admin") renderAdmin().catch(e=>toast(e.message));
 }
 document.querySelectorAll("[data-page]").forEach(b=>b.addEventListener("click",()=>page(b.dataset.page)));
@@ -115,8 +116,30 @@ function renderProfile() {
 $("supportLink").onclick=()=>window.open("https://t.me/Givorasupport","_blank");
 $("promoApply").onclick=async()=>{const b=$("promoApply");b.disabled=true;$("promoResult").textContent="Проверяем промокод…";try{const r=await api("/api/promo/redeem",{method:"POST",body:JSON.stringify({code:$("promoInput").value.trim()})});$("promoResult").textContent=`Промокод активирован: +${money(r.bonus)} Givora Stars`; $("promoInput").value="";await refreshAll();}catch(e){$("promoResult").textContent=e.message;}finally{b.disabled=false;}};
 $("adminEntry").onclick=()=>{if(me?.isAdmin)page("admin");};
+
+let inventoryTab="owned", myListings=[];
+async function loadInventoryPage(){
+ const [iv,ls]=await Promise.all([api("/api/inventory"),api("/api/my-listings")]);
+ inventoryData=iv.inventory||[];myListings=ls.listings||[];renderInventoryPage();
+}
+function renderInventoryPage(){
+ document.querySelectorAll("[data-invtab]").forEach(b=>b.classList.toggle("active",b.dataset.invtab===inventoryTab));
+ const rows=inventoryTab==="owned"?inventoryData.filter(x=>x.status==="available"):myListings;
+ $("myinventory").innerHTML=rows.map(g=>{
+  const img=g.image_url||g.gift_url||"";
+  return `<div class="panel" style="display:flex;gap:12px;align-items:center">${img?`<img src="${safe(img)}" alt="" style="width:76px;height:76px;object-fit:cover;border-radius:12px">`:""}<div style="flex:1"><b>${safe(g.gift_name||g.name)}</b><p class="muted">${inventoryTab==="owned"?"В инвентаре":"На продаже"}${g.price?` · ${money(g.price)} ⭐`:""}</p>${inventoryTab==="owned"?`<button class="action good" data-sell="${safe(g.id)}">Выставить</button>`:""}</div></div>`;
+ }).join("")||'<div class="empty">Здесь пока нет подарков</div>';
+ $("myinventory").querySelectorAll("[data-sell]").forEach(b=>b.onclick=()=>sellInventoryItem(b.dataset.sell));
+}
+async function sellInventoryItem(id){
+ const price=Number(prompt("Цена в Givora Stars"));
+ if(!Number.isSafeInteger(price)||price<=0)return;
+ try{await api(`/api/admin/inventory/${encodeURIComponent(id)}/publish`,{method:"POST",body:JSON.stringify({price})});toast("Подарок выставлен на продажу");await loadInventoryPage();await refreshListings();}
+ catch(e){toast(e.message);}
+}
+document.querySelectorAll("[data-invtab]").forEach(b=>b.onclick=()=>{inventoryTab=b.dataset.invtab;renderInventoryPage();});
 function renderOrders() {
-  const inv=inventoryData.map(g=>`<div class="panel"><b>${safe(g.gift_name)}</b><p class="muted">Статус подарка: ${safe(g.status)} · Заказ №${safe(g.order_id)}</p><a href="${safe(g.gift_url)}" target="_blank" rel="noopener">Открыть подарок</a></div>`);
+  const inv=inventoryData.map(g=>`<div class="panel">${g.image_url?`<img src="${safe(g.image_url)}" alt="" style="width:90px;height:90px;object-fit:cover;border-radius:12px">`:""}<b>${safe(g.gift_name)}</b><p class="muted">Статус подарка: ${safe(g.status)} · Заказ №${safe(g.order_id)}</p><a href="${safe(g.gift_url)}" target="_blank" rel="noopener">Открыть подарок</a></div>`);
   $("inventorylist").innerHTML=inv.join("")||'<div class="empty">Подарков пока нет</div>';
   const req=(historyData.requests||[]).map(r=>`<div class="panel"><b>Заявка: ${safe(r.gift_name)}</b><p class="muted">Цена: ${money(r.price)} ⭐ · Статус: ${safe(r.status)}</p></div>`);
   const ord=(historyData.orders||[]).map(o=>`<div class="panel"><b>Заказ №${safe(o.id)}</b><p class="muted">${money(o.amount)} ⭐ · ${safe(o.status)}</p></div>`);
@@ -132,6 +155,10 @@ async function renderAdmin() {
     c.innerHTML=`<div class="balances"><div class="bal"><small>Заявки</small><b>${rq.requests.length}</b></div><div class="bal"><small>Пользователи</small><b>${us.users.length}</b></div><div class="bal"><small>Заказы</small><b>${od.orders.length}</b></div></div>
       <div class="panel"><h3>Администрирование</h3><button class="wide" id="goRequests">Заявки на размещение</button><button class="wide" id="goListings">Каталог</button><button class="wide" id="goUsers">Пользователи и начисления</button><button class="wide" id="goOrders">Заказы и доставка</button></div>`;
     [["goRequests","requests"],["goListings","listings"],["goUsers","users"],["goOrders","orders"]].forEach(([id,t])=>$(id).onclick=()=>{adminTab=t;renderAdmin().catch(e=>toast(e.message));});
+  }
+  if(adminTab==="inventory"){
+    c.innerHTML=`<div class="panel"><h3>Выдать виртуальный подарок</h3><label>@username или Telegram ID</label><input id="issueuser" placeholder="@username или 123456789"><label>Название подарка</label><input id="issuename" maxlength="100"><label>URL картинки (HTTPS)</label><input id="issueimage" placeholder="https://..."><button class="primary" id="issuegift">Выдать подарок</button><p id="issueresult" class="muted"></p></div><div class="panel"><h3>Склад владельца</h3><p class="muted">Выданные виртуальные подарки сразу появятся у пользователя в инвентаре.</p></div>`;
+    $("issuegift").onclick=async()=>{const b=$("issuegift");b.disabled=true;try{await api("/api/admin/inventory",{method:"POST",body:JSON.stringify({user:$("issueuser").value.trim(),name:$("issuename").value.trim(),imageUrl:$("issueimage").value.trim()})});$("issueresult").textContent="Подарок выдан";$("issueuser").value=$("issuename").value=$("issueimage").value="";}catch(e){$("issueresult").textContent=e.message;}finally{b.disabled=false;}};
   }
   if(adminTab==="requests"){
     const d=await api("/api/admin/requests");

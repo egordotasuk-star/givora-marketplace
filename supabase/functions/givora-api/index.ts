@@ -44,6 +44,7 @@ Deno.serve(async(req)=>{
    for(const x of [orders,requests,ledger])if(x.error)throw x.error;
    return reply({orders:orders.data||[],requests:requests.data||[],ledger:ledger.data||[]});}
   if(path==="/api/inventory"){const {data:d,error}=await db.from("inventory").select("*").eq("telegram_id",tg.id).order("created_at",{ascending:false});if(error)throw error;return reply({inventory:d||[]});}
+  if(path==="/api/my-listings"){const {data:d,error}=await db.from("gifts").select("*").eq("seller_telegram_id",tg.id).eq("active",true).order("created_at",{ascending:false});if(error)throw error;return reply({listings:d||[]});}
   if(path==="/api/promo/redeem"&&method==="POST"){
    const {data:bonus,error}=await db.rpc("givora_redeem_promo",{p_user:tg.id,p_code:String(data.code||"")});if(error)throw error;return reply({ok:true,bonus});
   }
@@ -54,29 +55,35 @@ Deno.serve(async(req)=>{
   }
   if(path.startsWith("/api/admin/")){
    admin();
+   if(path==="/api/admin/promos"&&method==="GET"){const {data:d,error}=await db.from("promos").select("*").order("created_at",{ascending:false});if(error)throw error;return reply({promos:d||[]});}
+   const promoDelete=path.match(/^\/api\/admin\/promos\/([^/]+)$/);if(promoDelete&&method==="DELETE"){const {error}=await db.from("promos").update({active:false}).eq("id",promoDelete[1]);if(error)throw error;return reply({ok:true});}
+   if(path==="/api/admin/inventory"&&method==="POST"){
+    const who=String(data.user||"").trim().replace(/^@/,""),name=String(data.name||"").trim(),imageUrl=String(data.imageUrl||"").trim();
+    if(!who||!name||!/^https:\/\//i.test(imageUrl))throw new Error("Укажи пользователя, название и HTTPS-ссылку на картинку");
+    let uq=db.from("profiles").select("telegram_id").limit(1);
+    uq=/^\d+$/.test(who)?uq.eq("telegram_id",Number(who)):uq.ilike("username",who);
+    const {data:u,error:ue}=await uq.maybeSingle();if(ue)throw ue;if(!u)throw new Error("Пользователь не найден. Он должен открыть Givora хотя бы один раз");
+    const {data:id,error}=await db.rpc("givora_admin_issue_gift",{p_user:u.telegram_id,p_name:name,p_image_url:imageUrl});if(error)throw error;return reply({ok:true,id});
+   }
    if(path==="/api/admin/promos"&&method==="POST"){
     const code=String(data.code||"").trim().toUpperCase(),bonus=Math.floor(Number(data.bonus)),usageLimit=Math.floor(Number(data.usageLimit));
     if(!/^[A-Z0-9_-]{4,40}$/.test(code)||!Number.isSafeInteger(bonus)||bonus<=0||!Number.isSafeInteger(usageLimit)||usageLimit<=0)throw new Error("Проверь код, бонус и лимит");
     const {data:d,error}=await db.from("promos").insert({code,bonus,usage_limit:usageLimit,expires_at:data.expiresAt||null}).select("code,bonus,usage_limit,expires_at").single();if(error)throw error;return reply({promo:d});
    }
+   const publish=path.match(/^\/api\/admin\/inventory\/([^/]+)\/publish$/);if(publish&&method==="POST"){const price=Math.floor(Number(data.price));if(!Number.isSafeInteger(price)||price<=0)throw new Error("Цена должна быть положительной");const {data:id,error}=await db.rpc("givora_publish_inventory",{p_user:tg.id,p_item:publish[1],p_price:price});if(error)throw error;return reply({ok:true,listingId:id});}
    if(path==="/api/admin/requests"){const {data:d,error}=await db.from("gift_requests").select("*").order("created_at",{ascending:false});if(error)throw error;return reply({requests:d||[]});}
    if(path==="/api/admin/users"){const q=new URLSearchParams(rawPath.split("?")[1]||"").get("q")||"";let query=db.from("profiles").select("telegram_id,username,first_name,role,wallets(balance)").limit(50);if(q)query=query.or(`username.ilike.%${q.replace(/[^\w]/g,"")}%,telegram_id.eq.${/^\d+$/.test(q)?q:"0"}`);const {data:d,error}=await query;if(error)throw error;return reply({users:(d||[]).map((u:any)=>({...u,balance:u.wallets?.balance||0}))});}
    if(path==="/api/admin/orders"){const {data:d,error}=await db.from("orders").select("*").order("created_at",{ascending:false});if(error)throw error;return reply({orders:d||[]});}
-   if(path==="/api/admin/listings"&&method==="POST"){const {data:d,error}=await db.from("gifts").insert({name:data.name,gift_url:data.giftUrl,price:Number(data.price),seller_telegram_id:r.telegram_id,active:true}).select().single();if(error)throw error;return reply({listing:d});}
+   if(path==="/api/admin/listings"&&method==="POST"){const {data:d,error}=await db.from("gifts").insert({name:data.name,gift_url:data.giftUrl,image_url:data.imageUrl||null,price:Number(data.price),seller_telegram_id:tg.id,active:true}).select().single();if(error)throw error;return reply({listing:d});}
    const del=path.match(/^\/api\/admin\/listings\/([^/]+)$/);if(del&&method==="DELETE"){const {error}=await db.from("gifts").update({active:false}).eq("id",del[1]);if(error)throw error;return reply({ok:true});}
    const review=path.match(/^\/api\/admin\/requests\/([^/]+)\/review$/);if(review&&method==="POST"){
     const {data:r,error:re}=await db.from("gift_requests").select("*").eq("id",review[1]).single();if(re)throw re;
     if(r.status!=="pending")throw new Error("Заявка уже обработана");
-    if(data.decision==="approve"){if(!data.name||!data.giftUrl||!Number(data.price))throw new Error("Для публикации заполни карточку проверенного подарка");const {error}=await db.from("gifts").insert({name:data.name,gift_url:data.giftUrl,price:Number(data.price),seller_telegram_id:r.telegram_id,active:true});if(error)throw error;}
+    if(data.decision==="approve"){if(!data.name||!data.giftUrl||!Number(data.price))throw new Error("Для публикации заполни карточку проверенного подарка");const {error}=await db.from("gifts").insert({name:data.name,gift_url:data.giftUrl,price:Number(data.price),seller_telegram_id:tg.id,active:true});if(error)throw error;}
     const {error}=await db.from("gift_requests").update({status:data.decision==="approve"?"approved":"rejected",reviewed_at:new Date().toISOString()}).eq("id",review[1]);if(error)throw error;return reply({ok:true});
    }
-   const credit=path.match(/^\/api\/admin\/users\/(\d+)\/credit$/);if(credit&&method==="POST"){const amount=Math.floor(Number(data.amount));if(!Number.isSafeInteger(amount)||amount<=0||amount>1000000)throw new Error("Некорректная сумма");const id=Number(credit[1]);const {data:w,error}=await db.from("wallets").select("balance").eq("telegram_id",id).single();if(error)throw error;const {error:ue}=await db.from("wallets").update({balance:w.balance+amount}).eq("telegram_id",id);if(ue)throw ue;await db.from("ledger").insert({telegram_id:id,amount,kind:"admin_credit",reference:crypto.randomUUID(),note:"Ручное начисление владельцем"});return reply({ok:true});}
-   const order=path.match(/^\/api\/admin\/orders\/([^/]+)\/(delivered|refund)$/);if(order&&method==="POST"){
-    const {data:o,error}=await db.from("orders").select("*").eq("id",order[1]).single();if(error)throw error;if(o.status!=="pending_delivery")throw new Error("Заказ уже обработан");
-    if(order[2]==="refund"){const {data:w}=await db.from("wallets").select("balance").eq("telegram_id",o.buyer_telegram_id).single();await db.from("wallets").update({balance:Number(w.balance)+o.amount}).eq("telegram_id",o.buyer_telegram_id);await db.from("ledger").insert({telegram_id:o.buyer_telegram_id,amount:o.amount,kind:"refund",reference:`refund:${o.id}`,note:"Возврат по заказу"});}
-    else {const {data:g}=await db.from("gifts").select("name,gift_url,seller_telegram_id").eq("id",o.gift_id).single();await db.from("inventory").insert({telegram_id:o.buyer_telegram_id,gift_id:o.gift_id,gift_name:g?.name||"Telegram Gift",gift_url:g?.gift_url,order_id:o.id,status:"delivered"});if(g?.seller_telegram_id){const {data:sw}=await db.from("wallets").select("balance").eq("telegram_id",g.seller_telegram_id).single();await db.from("wallets").update({balance:Number(sw?.balance||0)+Number(o.amount),updated_at:new Date().toISOString()}).eq("telegram_id",g.seller_telegram_id);await db.from("ledger").insert({telegram_id:g.seller_telegram_id,amount:o.amount,kind:"sale",reference:`sale:${o.id}`,note:"Продажа подарка после подтверждения доставки"});}}
-    await db.from("orders").update({status:order[2],completed_at:new Date().toISOString()}).eq("id",o.id);return reply({ok:true});
-   }
+   const credit=path.match(/^\/api\/admin\/users\/([^/]+)\/credit$/);if(credit&&method==="POST"){const amount=Math.floor(Number(data.amount));if(!Number.isSafeInteger(amount)||amount<=0||amount>1000000)throw new Error("Некорректная сумма");const who=decodeURIComponent(credit[1]).replace(/^@/,"");let q=db.from("profiles").select("telegram_id").limit(1);q=/^\d+$/.test(who)?q.eq("telegram_id",Number(who)):q.ilike("username",who);const {data:u,error:ue}=await q.maybeSingle();if(ue)throw ue;if(!u)throw new Error("Пользователь не найден");const {error}=await db.rpc("givora_admin_credit",{p_user:u.telegram_id,p_amount:amount});if(error)throw error;return reply({ok:true});}
+   const order=path.match(/^\/api\/admin\/orders\/([^/]+)\/(delivered|refund)$/);if(order&&method==="POST"){const {error}=await db.rpc("givora_finish_order",{p_order:order[1],p_action:order[2]});if(error)throw error;return reply({ok:true});}
   }
   throw new Error("Неизвестный API endpoint");
  }catch(e){return reply({error:String(e?.message||e),message:String(e?.message||e)},400);}
