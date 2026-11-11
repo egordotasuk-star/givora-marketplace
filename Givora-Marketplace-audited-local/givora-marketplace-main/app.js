@@ -1,0 +1,249 @@
+(() => {
+"use strict";
+const $ = id => document.getElementById(id);
+const tg = window.Telegram?.WebApp;
+
+const ADMIN_LABEL = "@harmonydurov";
+let me = null, listings = [], historyData = {orders:[], ledger:[], requests:[]}, inventoryData = [];
+let favs = new Set(JSON.parse(localStorage.getItem("givoraFavs") || "[]"));
+let rate = null, activePage = "catalog", adminTab = "overview";
+const money = n => Number(n || 0).toLocaleString("ru-RU");
+const safe = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toast(s) { $("toast").textContent=s; $("toast").classList.add("show"); setTimeout(()=>$("toast").classList.remove("show"),2600); }
+function setStatus(s, bad=false) { const el=$("statusline"); if(el){el.textContent=s;el.classList.toggle("error",bad);} }
+function api(path, options={}) {
+  const base=String(window.GIVORA_SUPABASE_URL||"").replace(/\/+$/, "");
+  const anon=String(window.GIVORA_SUPABASE_ANON_KEY||"");
+  if(!base.includes(".supabase.co") || anon.startsWith("YOUR-")) return Promise.reject(new Error("Настрой Supabase URL и anon key в config.js"));
+  if(!tg?.initData) return Promise.reject(new Error("Открой Givora через Telegram Mini App"));
+  return fetch(`${base}/functions/v1/${window.GIVORA_FUNCTION||"givora-api"}`,{
+    method:"POST",headers:{"Content-Type":"application/json","apikey":anon,"Authorization":`Bearer ${anon}`},
+    body:JSON.stringify({path,method:options.method||"GET",body:options.body?JSON.parse(options.body):{},initData:tg.initData})
+  }).then(async r=>{const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.message||data.error||`Ошибка сервера (${r.status})`);return data;});
+}
+function page(p) {
+  activePage=p;
+  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id===p));
+  document.querySelectorAll(".nav").forEach(n=>n.classList.toggle("active",n.dataset.page===p));
+  if(p==="profile") renderProfile();
+  if(p==="favorites") renderFavs();
+  if(p==="orders") loadHistory().then(renderOrders).catch(e=>toast(e.message));
+  if(p==="inventory") loadInventoryPage().catch(e=>toast(e.message));
+  if(p==="admin") renderAdmin().catch(e=>toast(e.message));
+}
+document.querySelectorAll("[data-page]").forEach(b=>b.addEventListener("click",()=>page(b.dataset.page)));
+$("toCatalog").onclick=()=>$("search").focus();
+const savedTheme=localStorage.getItem("givoraTheme");
+if(savedTheme==="light") document.body.classList.add("light");
+$("theme").onclick=()=>{
+  document.body.classList.toggle("light");
+  localStorage.setItem("givoraTheme",document.body.classList.contains("light")?"light":"dark");
+};
+function giftImage(g) {
+  if (g.image_url) return g.image_url;
+  const slug=String(g.gift_url||"").split("/").pop();
+  return slug ? `https://nft.fragment.com/gift/${encodeURIComponent(slug)}.large.jpg` : "";
+}
+function card(g) {
+  const id=String(g.id), img=giftImage(g);
+  return `<article class="gift">
+    <div class="giftimg">${img?`<img src="${safe(img)}" alt="${safe(g.name)}" loading="lazy" onerror="this.style.display='none'">`:"✦"}</div>
+    <div class="giftname">${safe(g.name)}</div><div class="sub">ID: ${safe(g.gift_id || id)} · Givora</div>
+    <div class="price">${money(g.price)} ⭐</div>
+    <div class="giftbuttons"><button data-fav="${safe(id)}" aria-label="В избранное">${favs.has(id)?"♥":"♡"}</button>
+    <button class="buy" data-buy="${safe(id)}">Купить</button></div></article>`;
+}
+function bindCards(root) {
+  root.querySelectorAll("[data-fav]").forEach(b=>b.onclick=()=>{const id=b.dataset.fav;favs.has(id)?favs.delete(id):favs.add(id);localStorage.setItem("givoraFavs",JSON.stringify([...favs]));renderGrid();if(activePage==="favorites")renderFavs();});
+  root.querySelectorAll("[data-buy]").forEach(b=>b.onclick=()=>confirmPurchase(b.dataset.buy));
+}
+function renderGrid() {
+  const q=($("search").value||"").toLowerCase();
+  const rows=listings.filter(g=>(`${g.name} ${g.gift_id}`).toLowerCase().includes(q));
+  $("grid").innerHTML=rows.map(card).join("")||'<div class="empty">Пока нет доступных подарков</div>';
+  bindCards($("grid"));
+}
+function renderFavs() {
+  const rows=listings.filter(g=>favs.has(String(g.id)));
+  $("favgrid").innerHTML=rows.map(card).join("")||'<div class="empty">Пока нет избранных подарков</div>';
+  bindCards($("favgrid"));
+}
+$("search").oninput=renderGrid;
+$("filter").innerHTML='<option value="all">Все подарки</option>';
+function openModal(html) { $("modalbody").innerHTML=html; $("modal").classList.add("open"); }
+function closeModal() { $("modal").classList.remove("open"); }
+$("close").onclick=closeModal;
+$("modal").onclick=e=>{if(e.target===$("modal"))closeModal();};
+$("addGift1").onclick=$("addGift2").onclick=()=>{
+  openModal(`<h2>Выставить подарок</h2>
+  <p class="muted">Сначала отправь настоящий Telegram-подарок на аккаунт <b>@GivoraStore</b>. После отправки нажми кнопку ниже. Заявка попадёт владельцу на проверку; в каталог подарок попадёт только после подтверждения получения.</p>
+  <button class="primary" id="sendreq">Я отправил подарок на @GivoraStore</button>`);
+  $("sendreq").onclick=async()=>{
+    $("sendreq").disabled=true;
+    try { await api("/api/requests",{method:"POST",body:JSON.stringify({})}); closeModal(); await loadHistory(); toast("Заявка отправлена на проверку"); }
+    catch(e){ $("sendreq").disabled=false; toast(e.message); }
+  };
+};
+async function confirmPurchase(id) {
+  const g=listings.find(x=>String(x.id)===String(id)); if(!g)return;
+  openModal(`<h2>Кому отправить подарок?</h2><p>${safe(g.name)} · <b>${money(g.price)} ⭐</b></p>
+  <label>Telegram username получателя (необязательно)</label><input id="recipientUsername" maxlength="64" placeholder="@username">
+  <p class="muted">Оставь поле пустым, чтобы подарок поступил тебе. Получатель должен хотя бы один раз открыть Givora. Физическая передача Telegram-подарка подтверждается администратором отдельно.</p>
+  <button class="primary" id="confirmbuy">Купить за ${money(g.price)} ⭐</button>`);
+  $("confirmbuy").onclick=async()=>{
+    $("confirmbuy").disabled=true;
+    try {
+      const result=await api(`/api/purchase/${encodeURIComponent(id)}`,{method:"POST",body:JSON.stringify({recipientUsername:$("recipientUsername").value.trim()})});
+      closeModal(); toast(`Заказ №${result.orderId} создан`); await refreshAll();
+    } catch(e){$("confirmbuy").disabled=false;toast(e.message);}
+  };
+}
+async function loadHistory(){historyData=await api("/api/history");return historyData;}
+function renderProfile() {
+  const tgUser=tg?.initDataUnsafe?.user||{};
+  const first=me?.first_name||me?.firstName||tgUser.first_name||"Пользователь";
+  const last=me?.last_name||me?.lastName||tgUser.last_name||"";
+  const username=me?.username||tgUser.username||"";
+  const fullName=`${first} ${last}`.trim();
+  $("profileName").textContent=fullName;
+  $("uname").textContent=username?`@${username}`:"Имя пользователя Telegram";
+  $("profileId").textContent=`Telegram ID: ${me?.telegram_id||me?.telegramId||tgUser.id||"—"}`;
+  const avatar=$("profileAvatar");
+  avatar.textContent=(first[0]||"G").toUpperCase();
+  const photo=me?.photo_url||me?.photoUrl||tgUser.photo_url;
+  if(photo){avatar.innerHTML=`<img src="${safe(photo)}" alt="Аватар" referrerpolicy="no-referrer">`;}
+  $("profileBalance").innerHTML=`<div class="bal"><small>Givora Stars ⭐</small><b>${money(me?.balance)} ⭐</b></div>`;
+  $("balanceRates").innerHTML=`<div class="bal"><small>Доступный баланс</small><b>${money(me?.balance)} ⭐</b></div>`;
+  $("starbalance").textContent=money(me?.balance);
+  $("adminHint").textContent=me?.isAdmin?"Администратор Givora":"Ваш профиль на маркетплейсе Givora";
+  $("adminEntry").style.display=me?.isAdmin?"block":"none";
+}
+$("supportLink").onclick=()=>window.open("https://t.me/Givorasupport","_blank");
+$("promoApply").onclick=async()=>{const b=$("promoApply");b.disabled=true;$("promoResult").textContent="Проверяем промокод…";try{const r=await api("/api/promo/redeem",{method:"POST",body:JSON.stringify({code:$("promoInput").value.trim()})});$("promoResult").textContent=`Промокод активирован: +${money(r.bonus)} Givora Stars`; $("promoInput").value="";await refreshAll();}catch(e){$("promoResult").textContent=e.message;}finally{b.disabled=false;}};
+$("adminEntry").onclick=()=>{if(me?.isAdmin)page("admin");};
+
+let inventoryTab="owned", myListings=[];
+async function loadInventoryPage(){
+ const [iv,ls]=await Promise.all([api("/api/inventory"),api("/api/my-listings")]);
+ inventoryData=iv.inventory||[];myListings=ls.listings||[];renderInventoryPage();
+}
+function renderInventoryPage(){
+ document.querySelectorAll("[data-invtab]").forEach(b=>b.classList.toggle("active",b.dataset.invtab===inventoryTab));
+ const rows=inventoryTab==="owned"?inventoryData.filter(x=>x.status==="available"):myListings;
+ $("myinventory").innerHTML=rows.map(g=>{
+  const img=g.image_url||g.gift_url||"";
+  return `<div class="panel" style="display:flex;gap:12px;align-items:center">${img?`<img src="${safe(img)}" alt="" style="width:76px;height:76px;object-fit:cover;border-radius:12px">`:""}<div style="flex:1"><b>${safe(g.gift_name||g.name)}</b><p class="muted">${inventoryTab==="owned"?"В инвентаре":"На продаже"}${g.price?` · ${money(g.price)} ⭐`:""}</p>${inventoryTab==="owned"?`<button class="action good" data-sell="${safe(g.id)}">Выставить</button>`:""}</div></div>`;
+ }).join("")||'<div class="empty">Здесь пока нет подарков</div>';
+ $("myinventory").querySelectorAll("[data-sell]").forEach(b=>b.onclick=()=>sellInventoryItem(b.dataset.sell));
+}
+async function sellInventoryItem(id){
+ const price=Number(prompt("Цена в Givora Stars"));
+ if(!Number.isSafeInteger(price)||price<=0)return;
+ try{await api(`/api/inventory/${encodeURIComponent(id)}/publish`,{method:"POST",body:JSON.stringify({price})});toast("Подарок выставлен на продажу");await loadInventoryPage();await refreshListings();}
+ catch(e){toast(e.message);}
+}
+document.querySelectorAll("[data-invtab]").forEach(b=>b.onclick=()=>{inventoryTab=b.dataset.invtab;renderInventoryPage();});
+function renderOrders() {
+  const inv=inventoryData.map(g=>`<div class="panel">${g.image_url?`<img src="${safe(g.image_url)}" alt="" style="width:90px;height:90px;object-fit:cover;border-radius:12px">`:""}<b>${safe(g.gift_name)}</b><p class="muted">Статус подарка: ${safe(g.status)} · Заказ №${safe(g.order_id)}</p><a href="${safe(g.gift_url)}" target="_blank" rel="noopener">Открыть подарок</a></div>`);
+  $("inventorylist").innerHTML=inv.join("")||'<div class="empty">Подарков пока нет</div>';
+  const req=(historyData.requests||[]).map(r=>`<div class="panel"><b>Заявка: ${safe(r.gift_name)}</b><p class="muted">Цена: ${money(r.price)} ⭐ · Статус: ${safe(r.status)}</p></div>`);
+  const ord=(historyData.orders||[]).map(o=>`<div class="panel"><b>Заказ №${safe(o.id)}</b><p class="muted">${money(o.amount)} ⭐ · ${safe(o.status)}</p></div>`);
+  const led=(historyData.ledger||[]).map(l=>`<div class="panel"><b>${safe(l.kind)}</b><p class="muted">${Number(l.amount)>0?"+":""}${money(l.amount)} ⭐ · ${safe(l.note||"")}</p></div>`);
+  $("orderlist").innerHTML=[...ord,...req,...led].join("")||'<div class="empty">История пока пуста</div>';
+}
+async function renderAdmin() {
+  if(!me?.isAdmin) throw new Error("Доступ только администратору");
+  document.querySelectorAll("[data-tab]").forEach(b=>b.classList.toggle("active",b.dataset.tab===adminTab));
+  const c=$("admincontent"); c.innerHTML='<div class="empty">Загрузка…</div>';
+  if(adminTab==="overview"){
+    const [rq,us,od]=await Promise.all([api("/api/admin/requests"),api("/api/admin/users"),api("/api/admin/orders")]);
+    c.innerHTML=`<div class="balances"><div class="bal"><small>Заявки</small><b>${rq.requests.length}</b></div><div class="bal"><small>Пользователи</small><b>${us.users.length}</b></div><div class="bal"><small>Заказы</small><b>${od.orders.length}</b></div></div>
+      <div class="panel"><h3>Администрирование</h3><button class="wide" id="goRequests">Заявки на размещение</button><button class="wide" id="goListings">Каталог</button><button class="wide" id="goUsers">Пользователи и начисления</button><button class="wide" id="goOrders">Заказы и доставка</button></div>`;
+    [["goRequests","requests"],["goListings","listings"],["goUsers","users"],["goOrders","orders"]].forEach(([id,t])=>$(id).onclick=()=>{adminTab=t;renderAdmin().catch(e=>toast(e.message));});
+  }
+  if(adminTab==="requests"){
+    const d=await api("/api/admin/requests");
+    c.innerHTML=d.requests.map(r=>`<div class="adminrow"><div><b>${safe(r.gift_name)}</b><small>@${safe(r.username||"user")} · ${money(r.price)} ⭐</small><small><a href="${safe(r.gift_url)}" target="_blank" rel="noopener">Открыть подарок</a> · ${safe(r.status)}</small></div><div>${r.status==="pending"?`<button class="action good" data-approve="${r.id}">Принять</button> <button class="action bad" data-reject="${r.id}">Отклонить</button>`:"Обработано"}</div></div>`).join("")||'<div class="empty">Заявок нет</div>';
+    c.querySelectorAll("[data-approve]").forEach(b=>b.onclick=()=>reviewRequest(b.dataset.approve,"approve"));
+    c.querySelectorAll("[data-reject]").forEach(b=>b.onclick=()=>reviewRequest(b.dataset.reject,"reject"));
+  }
+  if(adminTab==="listings"){
+    const d=await api("/api/listings");
+    c.innerHTML=`<button class="primary" id="admadd">＋ Добавить подарок со склада Givora</button>`+
+      d.listings.map(g=>`<div class="adminrow"><div><b>${safe(g.name)}</b><small>${safe(g.gift_id)} · ${money(g.price)} ⭐</small></div><button class="action bad" data-del="${g.id}">Снять</button></div>`).join("");
+    $("admadd").onclick=addListing;
+    c.querySelectorAll("[data-del]").forEach(b=>b.onclick=async()=>{try{await api(`/api/admin/listings/${b.dataset.del}`,{method:"DELETE"});await renderAdmin();await refreshListings();}catch(e){toast(e.message);}});
+  }
+  if(adminTab==="users"){
+    c.innerHTML=`<div class="panel"><h3>Пользователи</h3><input id="userquery" placeholder="Telegram username или ID"><button class="outline" id="findusers">Найти</button><div id="userresults"></div></div>`;
+    $("findusers").onclick=async()=>{try{const d=await api(`/api/admin/users?q=${encodeURIComponent($("userquery").value)}`);$("userresults").innerHTML=d.users.map(u=>`<div class="adminrow"><div><b>${safe(u.username?"@"+u.username:u.first_name)}</b><small>ID: ${safe(u.telegram_id)} · Баланс ${money(u.balance)} ⭐</small></div><button class="action good" data-credit="${safe(u.telegram_id)}">Начислить</button></div>`).join("")||"Пользователей не найдено";$("userresults").querySelectorAll("[data-credit]").forEach(b=>b.onclick=()=>creditUser(b.dataset.credit));}catch(e){toast(e.message);}};
+  }
+  if(adminTab==="orders"){
+    const d=await api("/api/admin/orders");
+    c.innerHTML=d.orders.map(o=>`<div class="adminrow"><div><b>Заказ №${safe(o.id)} · ${money(o.amount)} ⭐</b><small>Покупатель: ${safe(o.buyer_username || o.buyer_id)} · Получатель: ${safe(o.recipient_username || o.recipient_id || "не указан")} · Статус: ${safe(o.status)}</small></div><div>${o.status==="pending_delivery"?`<button class="action good" data-delivered="${o.id}">Доставка выполнена</button><button class="action bad" data-refund="${o.id}">Возврат</button>`:safe(o.status)}</div></div>`).join("")||'<div class="empty">Заказов нет</div>';
+    c.querySelectorAll("[data-delivered]").forEach(b=>b.onclick=()=>finishOrder(b.dataset.delivered,"delivered"));
+    c.querySelectorAll("[data-refund]").forEach(b=>b.onclick=()=>finishOrder(b.dataset.refund,"refund"));
+  }
+  if(adminTab==="inventory"){
+    const d=await api("/api/admin/inventory");
+    const stockRows=(d.inventory||[]).map(x=>`<div class="adminrow"><div><b>${safe(x.gift_name)}</b><small>${safe(x.status)} · ${safe(x.gift_url||"Без ссылки")}</small></div><div><button class="action good" data-stockpublish="${x.id}" ${x.status==="listed"?"disabled":""}>В каталог</button> <button class="action bad" data-stockdelete="${x.id}">Удалить</button></div></div>`).join("")||'<div class="empty">Склад пока пуст</div>';
+    c.innerHTML=`<div class="panel"><h3>Выдать виртуальный подарок</h3><p class="muted">Это тестовая карточка в Givora; она не передаёт настоящий Telegram NFT.</p><label>@username или Telegram ID</label><input id="issueuser" placeholder="@username или 123456789"><label>Название подарка</label><input id="issuename" maxlength="100"><label>URL картинки (HTTPS)</label><input id="issueimage" placeholder="https://..."><button class="primary" id="issuegift">Выдать подарок</button><p id="issueresult" class="muted"></p></div>
+      <div class="panel"><h3>Склад Givora</h3><p class="muted">Добавляй сюда только подарки, которые действительно находятся на аккаунте @GivoraStore.</p><label>Название подарка</label><input id="stockname" maxlength="100" placeholder="Название подарка"><label>Ссылка на Telegram NFT</label><input id="stockurl" placeholder="https://t.me/nft/..."><button class="primary" id="stockadd">Добавить на склад</button></div>${stockRows}`;
+    $("issuegift").onclick=async()=>{const b=$("issuegift");b.disabled=true;try{await api("/api/admin/inventory",{method:"POST",body:JSON.stringify({user:$("issueuser").value.trim(),name:$("issuename").value.trim(),imageUrl:$("issueimage").value.trim()})});$("issueresult").textContent="Виртуальная карточка выдана";$("issueuser").value=$("issuename").value=$("issueimage").value="";}catch(e){$("issueresult").textContent=e.message;}finally{b.disabled=false;}};
+    $("stockadd").onclick=async()=>{try{const name=$("stockname").value.trim(),giftUrl=$("stockurl").value.trim();if(!name||!giftUrl)throw new Error("Заполни название и ссылку");await api("/api/admin/inventory",{method:"POST",body:JSON.stringify({name,giftUrl})});await renderAdmin();toast("Подарок добавлен на склад");}catch(e){toast(e.message);}};
+    c.querySelectorAll("[data-stockpublish]").forEach(b=>b.onclick=async()=>{const price=Number(prompt("Цена в тестовых Givora Stars"));if(!Number.isSafeInteger(price)||price<=0)return;try{await api(`/api/admin/inventory/${b.dataset.stockpublish}/publish`,{method:"POST",body:JSON.stringify({price})});await refreshListings();await renderAdmin();toast("Подарок опубликован в каталоге");}catch(e){toast(e.message);}});
+    c.querySelectorAll("[data-stockdelete]").forEach(b=>b.onclick=async()=>{if(!confirm("Удалить запись со склада?"))return;try{await api(`/api/admin/inventory/${b.dataset.stockdelete}`,{method:"DELETE"});await renderAdmin();toast("Запись удалена");}catch(e){toast(e.message);}});
+  }
+  if(adminTab==="settings"){
+    const [pd]=await Promise.all([api("/api/admin/promos")]);
+    c.innerHTML=`<div class="panel"><h3>Создать промокод</h3><label>Код</label><input id="promocode" maxlength="40" placeholder="GIVORA2026"><label>Бонус Givora Stars</label><input id="promobonus" type="number" min="1"><label>Лимит активаций</label><input id="promolimit" type="number" min="1" value="100"><label>Срок действия (необязательно)</label><input id="promoexpiry" type="datetime-local"><button class="primary" id="createpromo">Создать промокод</button><p class="muted" id="promoAdminResult"></p></div><div class="panel"><h3>Промокоды и активации</h3><div class="muted">Показываются использованные активации и оставшийся лимит.</div><div id="promolist"></div></div><div class="panel"><h3>Валюта и безопасность</h3><p>Givora Stars — внутренняя тестовая единица сервиса, не Telegram Stars и не средство вывода.</p><p>Администратор: ${ADMIN_LABEL}</p></div>`;
+    $("createpromo").onclick=async()=>{try{const r=await api("/api/admin/promos",{method:"POST",body:JSON.stringify({code:$("promocode").value,bonus:Number($("promobonus").value),usageLimit:Number($("promolimit").value),expiresAt:$("promoexpiry").value?new Date($("promoexpiry").value).toISOString():null})});$("promoAdminResult").textContent=`Промокод ${r.promo.code} создан`;await renderAdmin();}catch(e){$("promoAdminResult").textContent=e.message;}};
+    $("promolist").innerHTML=(pd.promos||[]).map(p=>`<div class="adminrow"><div><b>${safe(p.code)}</b><small>Бонус: ${money(p.bonus)} ⭐ · Активаций: ${money(p.uses)} / ${money(p.usage_limit)} · Осталось: ${money(Math.max(0,p.usage_limit-p.uses))} · ${p.active?"Активен":"Отключён"}</small></div><button class="action bad" data-promodelete="${p.id}">${p.active?"Удалить":"Удалён"}</button></div>`).join("")||'<div class="empty">Промокодов пока нет</div>';
+    $("promolist").querySelectorAll("[data-promodelete]").forEach(b=>b.onclick=async()=>{if(!confirm("Отключить этот промокод? История активаций сохранится."))return;try{await api(`/api/admin/promos/${b.dataset.promodelete}`,{method:"DELETE"});await renderAdmin();toast("Промокод отключён");}catch(e){toast(e.message);}});
+  }
+}
+async function reviewRequest(id,decision){try{let payload={decision};if(decision==="approve"){const name=prompt("Название полученного и проверенного подарка");if(!name)return;const giftUrl=prompt("Ссылка на Telegram NFT");if(!giftUrl)return;const price=Number(prompt("Цена в Givora Stars"));if(!Number.isSafeInteger(price)||price<=0)return;payload={decision,name,giftUrl,price};}await api(`/api/admin/requests/${id}/review`,{method:"POST",body:JSON.stringify(payload)});toast("Заявка обработана");await renderAdmin();await refreshListings();}catch(e){toast(e.message);}}
+function addListing(){
+ openModal(`<h2>Добавить подарок</h2><p class="muted">Добавляй только подарок, фактически полученный на аккаунт GivoraStore и проверенный тобой.</p>
+ <label>Название</label><input id="newname" maxlength="100"><label>Ссылка на NFT</label><input id="newurl" placeholder="https://t.me/nft/..."><label>Цена · Givora Stars</label><input id="newprice" type="number" min="1" step="1"><button class="primary" id="createListing">Добавить в каталог</button>`);
+ $("createListing").onclick=async()=>{try{await api("/api/admin/listings",{method:"POST",body:JSON.stringify({name:$("newname").value.trim(),giftUrl:$("newurl").value.trim(),price:Number($("newprice").value)})});closeModal();await refreshListings();await renderAdmin();toast("Подарок добавлен");}catch(e){toast(e.message);}};
+}
+async function creditUser(id){
+ openModal(`<h2>Начислить Givora Stars</h2><p>Пользователь ID: ${safe(id)}</p><label>Количество звёзд</label><input id="creditamount" type="number" min="1" step="1"><button class="primary" id="creditconfirm">Начислить</button>`);
+ $("creditconfirm").onclick=async()=>{try{await api(`/api/admin/users/${encodeURIComponent(id)}/credit`,{method:"POST",body:JSON.stringify({amount:Number($("creditamount").value)})});closeModal();toast("Баланс начислен");await renderAdmin();}catch(e){toast(e.message);}};
+}
+async function finishOrder(id,action){
+ const msg=action==="delivered"?"Подтверди, что Telegram-подарок действительно отправлен покупателю.":"Подтверди возврат Givora Stars покупателю.";
+ if(!confirm(msg))return;
+ try{await api(`/api/admin/orders/${id}/${action}`,{method:"POST",body:"{}"});toast("Заказ обновлён");await renderAdmin();}catch(e){toast(e.message);}
+}
+document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{adminTab=b.dataset.tab;renderAdmin().catch(e=>toast(e.message));});
+async function refreshListings(){const d=await api("/api/listings");listings=d.listings;renderGrid();renderFavs();}
+async function refreshAll(){const [m]=await Promise.all([api("/api/me"),refreshListings(),loadHistory()]);const user=m.user||m;me={...user,balance:user.balance??m.balance??0,isAdmin:user.isAdmin??m.isAdmin??false};const inv=await api("/api/inventory");inventoryData=inv.inventory;renderProfile();if(activePage==="orders")renderOrders();}
+async function loadRate(){
+ $("rate").textContent="Загрузка курса…";
+ let usd=null,usdt=null;
+ const jobs=[
+  fetch("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd").then(r=>r.json()).then(d=>usd=Number(d?.["the-open-network"]?.usd)),
+  fetch("https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT").then(r=>r.json()).then(d=>usdt=Number(d?.price))
+ ];
+ await Promise.allSettled(jobs);
+ if(!Number.isFinite(usd)||usd<=0)usd=usdt;
+ if(!Number.isFinite(usdt)||usdt<=0)usdt=usd;
+ rate=Number.isFinite(usd)&&usd>0?usd:null;
+ if(rate){$("rate").textContent=`1 TON ≈ $${usd.toFixed(4)} / ${usdt.toFixed(4)} USDT`;$("ratetime").textContent=`Обновлено ${new Date().toLocaleTimeString()}`;$("calcsource").textContent="Ориентировочный рыночный курс TON";calc();}
+ else{$("rate").textContent="Курс временно недоступен";$("calcsource").textContent="Попробуй обновить позже";}
+}
+function calc(){const n=Number($("ton").value);$("usd").textContent=rate!==null&&n>=0?(rate*n).toLocaleString("en-US",{style:"currency",currency:"USD"}):"—";$("usdt").textContent=rate!==null&&n>=0?`${(rate*n).toFixed(2)} USDT`:"—";}
+$("refresh").onclick=$("refresh2").onclick=loadRate;$("ton").oninput=calc;
+async function boot(){
+ if(tg){tg.ready();tg.expand();}
+if(!window.GIVORA_SUPABASE_URL||!window.GIVORA_SUPABASE_ANON_KEY||window.GIVORA_SUPABASE_URL.includes("YOUR-")){setStatus("Не настроено подключение Supabase",true);return;}
+ if(!tg?.initData){setStatus("Для входа открой Givora через Telegram Mini App.",true);return;}
+ setStatus("Подключаем аккаунт Telegram…");
+ try{await refreshAll();setStatus("Подключено к Givora");}
+ catch(e){setStatus(`Не удалось подключиться: ${e.message}`,true);}
+ loadRate();
+}
+boot();
+})();
